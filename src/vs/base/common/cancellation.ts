@@ -5,12 +5,22 @@
 
 'use strict';
 
-import Event, {Emitter} from 'vs/base/common/event';
+import Event, { Emitter } from 'vs/base/common/event';
+import { IDisposable } from 'vs/base/common/lifecycle';
 
 export interface CancellationToken {
-	isCancellationRequested: boolean;
-	onCancellationRequested: Event<any>;
+	readonly isCancellationRequested: boolean;
+	/**
+	 * An event emitted when cancellation is requested
+	 * @event
+	 */
+	readonly onCancellationRequested: Event<any>;
 }
+
+const shortcutEvent = Object.freeze(function (callback, context?): IDisposable {
+	let handle = setTimeout(callback.bind(context), 0);
+	return { dispose() { clearTimeout(handle); } };
+} as Event<any>);
 
 export namespace CancellationToken {
 
@@ -21,22 +31,17 @@ export namespace CancellationToken {
 
 	export const Cancelled: CancellationToken = Object.freeze({
 		isCancellationRequested: true,
-		onCancellationRequested: Event.None
+		onCancellationRequested: shortcutEvent
 	});
 }
 
-const ShortcutEvent: Event<any> = Object.freeze(function(callback, context?) {
-	let handle = setTimeout(callback.bind(context), 0);
-	return { dispose() { clearTimeout(handle); } };
-});
-
 class MutableToken implements CancellationToken {
 
-	private _isCancelled = false;
+	private _isCancelled: boolean = false;
 	private _emitter: Emitter<any>;
 
 	public cancel() {
-		if(!this._isCancelled) {
+		if (!this._isCancelled) {
 			this._isCancelled = true;
 			if (this._emitter) {
 				this._emitter.fire(undefined);
@@ -45,13 +50,13 @@ class MutableToken implements CancellationToken {
 		}
 	}
 
-	get isCancellationRequested():boolean {
+	get isCancellationRequested(): boolean {
 		return this._isCancelled;
 	}
 
 	get onCancellationRequested(): Event<any> {
 		if (this._isCancelled) {
-			return ShortcutEvent;
+			return shortcutEvent;
 		}
 		if (!this._emitter) {
 			this._emitter = new Emitter<any>();
@@ -74,13 +79,15 @@ export class CancellationTokenSource {
 	}
 
 	cancel(): void {
-		if(!this._token) {
+		if (!this._token) {
 			// save an object by returning the default
 			// cancelled token when cancellation happens
 			// before someone asks for the token
 			this._token = CancellationToken.Cancelled;
-		} else {
-			(<MutableToken> this._token).cancel();
+
+		} else if (this._token instanceof MutableToken) {
+			// actually cancel
+			this._token.cancel();
 		}
 	}
 

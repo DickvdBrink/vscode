@@ -3,54 +3,88 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import nls = require('vs/nls');
-import { Promise } from 'vs/base/common/winjs.base';
+import { localize } from 'vs/nls';
+import { TPromise } from 'vs/base/common/winjs.base';
 import { Action } from 'vs/base/common/actions';
-import { IExtensionsService } from 'vs/workbench/parts/extensions/common/extensions';
-import { IQuickOpenService } from 'vs/workbench/services/quickopen/browser/quickOpenService';
+import severity from 'vs/base/common/severity';
+import paths = require('vs/base/common/paths');
+import { ReloadWindowAction } from 'vs/workbench/electron-browser/actions';
+import { IExtensionsWorkbenchService } from 'vs/workbench/parts/extensions/common/extensions';
+import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
+import { IMessageService } from 'vs/platform/message/common/message';
+import { IEnvironmentService } from 'vs/platform/environment/common/environment';
+import { IWindowsService, IWindowService } from 'vs/platform/windows/common/windows';
+import { IFileService } from 'vs/platform/files/common/files';
+import URI from 'vs/base/common/uri';
+import { mnemonicButtonLabel } from 'vs/base/common/labels';
 
-export class ListExtensionsAction extends Action {
+export class OpenExtensionsFolderAction extends Action {
 
-	static ID = 'workbench.extensions.action.listExtensions';
-	static LABEL = nls.localize('showInstalledExtensions', "Show Installed Extensions");
+	static readonly ID = 'workbench.extensions.action.openExtensionsFolder';
+	static LABEL = localize('openExtensionsFolder', "Open Extensions Folder");
 
 	constructor(
 		id: string,
 		label: string,
-		@IExtensionsService private extensionsService: IExtensionsService,
-		@IQuickOpenService private quickOpenService: IQuickOpenService
+		@IWindowsService private windowsService: IWindowsService,
+		@IFileService private fileService: IFileService,
+		@IEnvironmentService private environmentService: IEnvironmentService
 	) {
 		super(id, label, null, true);
 	}
 
-	public run(): Promise {
-		return this.quickOpenService.show('ext ');
-	}
+	run(): TPromise<void> {
+		const extensionsHome = this.environmentService.extensionsPath;
 
-	protected isEnabled(): boolean {
-		return true;
+		return this.fileService.resolveFile(URI.file(extensionsHome)).then(file => {
+			let itemToShow: string;
+			if (file.children && file.children.length > 0) {
+				itemToShow = file.children[0].resource.fsPath;
+			} else {
+				itemToShow = paths.normalize(extensionsHome, true);
+			}
+
+			return this.windowsService.showItemInFolder(itemToShow);
+		});
 	}
 }
 
-export class InstallExtensionAction extends Action {
+export class InstallVSIXAction extends Action {
 
-	static ID = 'workbench.extensions.action.installExtension';
-	static LABEL = nls.localize('installExtension', "Install Extension");
+	static readonly ID = 'workbench.extensions.action.installVSIX';
+	static LABEL = localize('installVSIX', "Install from VSIX...");
 
 	constructor(
-		id: string,
-		label: string,
-		@IExtensionsService private extensionsService: IExtensionsService,
-		@IQuickOpenService private quickOpenService: IQuickOpenService
+		id = InstallVSIXAction.ID,
+		label = InstallVSIXAction.LABEL,
+		@IExtensionsWorkbenchService private extensionsWorkbenchService: IExtensionsWorkbenchService,
+		@IMessageService private messageService: IMessageService,
+		@IInstantiationService private instantiationService: IInstantiationService,
+		@IWindowService private windowsService: IWindowService
 	) {
-		super(id, label, null, true);
+		super(id, label, 'extension-action install-vsix', true);
 	}
 
-	public run(): Promise {
-		return this.quickOpenService.show('ext install ');
-	}
+	run(): TPromise<any> {
+		return this.windowsService.showOpenDialog({
+			title: localize('installFromVSIX', "Install from VSIX"),
+			filters: [{ name: 'VSIX Extensions', extensions: ['vsix'] }],
+			properties: ['openFile'],
+			buttonLabel: mnemonicButtonLabel(localize({ key: 'installButton', comment: ['&& denotes a mnemonic'] }, "&&Install"))
+		}).then(result => {
+			if (!result) {
+				return TPromise.as(null);
+			}
 
-	protected isEnabled(): boolean {
-		return true;
+			return TPromise.join(result.map(vsix => this.extensionsWorkbenchService.install(vsix))).then(() => {
+				this.messageService.show(
+					severity.Info,
+					{
+						message: localize('InstallVSIXAction.success', "Successfully installed the extension. Restart to enable it."),
+						actions: [this.instantiationService.createInstance(ReloadWindowAction, ReloadWindowAction.ID, localize('InstallVSIXAction.reloadNow', "Reload Now"))]
+					}
+				);
+			});
+		});
 	}
 }
